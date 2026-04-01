@@ -7,9 +7,7 @@ export const initialItems: WarehouseItem[] = [
     sku: '155-MONTAZH',
     quantity: 48,
     minQuantity: 10,
-    unit: 'шт',
     specs: '5A, 250V, 5x20мм, Быстродействующий',
-    imageUrl: 'https://static.chipdip.ru/lib/054/DOC000054737.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'Предохранители',
     location: '155 + Монтаж (8 + 40)',
@@ -23,9 +21,7 @@ export const initialItems: WarehouseItem[] = [
     sku: '119A-40A00-R02/04',
     quantity: 123,
     minQuantity: 20,
-    unit: 'шт',
     specs: '52-pin, Высота 4.0мм, Позолоченные контакты',
-    imageUrl: 'https://www.mouser.com/images/amphenol/lrg/119A-40A00-R02.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'MINI PCI-E',
     location: '155 + Стеллаж 1 полка 11',
@@ -39,9 +35,7 @@ export const initialItems: WarehouseItem[] = [
     sku: '119A-40A00-R02/04-FE',
     quantity: 56,
     minQuantity: 15,
-    unit: 'шт',
     specs: '52-pin, Высота 4.0мм, Металлический экран',
-    imageUrl: 'https://www.mouser.com/images/amphenol/lrg/119A-40A00-R02.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'MINI PCI-E',
     location: '155 + Стеллаж 1 полка 3',
@@ -55,7 +49,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '119A-80A00-R02',
     quantity: 126,
     minQuantity: 20,
-    unit: 'шт',
     category: 'РАЗЪЁМЫ',
     subclass: 'MINI PCI-E',
     location: '155 + Стеллаж 1 полка 3',
@@ -69,7 +62,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '119A-80A00-R02-FE',
     quantity: 800,
     minQuantity: 50,
-    unit: 'шт',
     category: 'РАЗЪЁМЫ',
     subclass: 'MINI PCI-E',
     location: '156 + Стеллаж 1 полка 3',
@@ -83,9 +75,7 @@ export const initialItems: WarehouseItem[] = [
     sku: '1473005-4',
     quantity: 12,
     minQuantity: 5,
-    unit: 'шт',
     specs: '0.5mm Pitch, 40 Positions, Docking Connector',
-    imageUrl: 'https://www.te.com/content/dam/te-com/global/english/product-images/147/1473005-4-p-1.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'TE',
     location: 'Стеллаж 1 полка 3',
@@ -99,9 +89,7 @@ export const initialItems: WarehouseItem[] = [
     sku: '15EDGK-3.5',
     quantity: 4,
     minQuantity: 10,
-    unit: 'шт',
     specs: 'Шаг 3.5мм, 2-24 контакта, Зеленый',
-    imageUrl: 'https://static.chipdip.ru/lib/248/DOC000248446.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'Клеммники',
     location: '156',
@@ -115,7 +103,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '15EDGK-3.81',
     quantity: 24,
     minQuantity: 10,
-    unit: 'шт',
     category: 'РАЗЪЁМЫ',
     subclass: 'Клеммники',
     location: '156',
@@ -129,7 +116,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '2-2013310-1',
     quantity: 94,
     specs: '204 Positions, 0.6mm Pitch, Right Angle',
-    imageUrl: 'https://www.te.com/content/dam/te-com/global/english/product-images/201/2-2013310-1-p-1.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'Память',
     location: 'Стеллаж 1 Полка 3',
@@ -167,7 +153,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '3353A-01',
     quantity: 44,
     specs: 'Металлический, IP67, для USB/RJ45',
-    imageUrl: 'https://static.chipdip.ru/lib/248/DOC000248446.jpg', // Placeholder for cap
     category: 'РАЗЪЁМЫ',
     subclass: 'Влагозащита',
     location: 'Стеллаж 1 Полка 2',
@@ -181,7 +166,6 @@ export const initialItems: WarehouseItem[] = [
     sku: '3353K00030',
     quantity: 47,
     specs: 'USB 2.0, IP67, Панельный монтаж',
-    imageUrl: 'https://static.chipdip.ru/lib/155/DOC000155604.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'Влагозащита',
     location: 'Стеллаж 1 Полка 2',
@@ -195,7 +179,6 @@ export const initialItems: WarehouseItem[] = [
     sku: 'AS-230UL',
     quantity: 0,
     specs: '230V, 16A, Заземление',
-    imageUrl: 'https://static.chipdip.ru/lib/054/DOC000054714.jpg',
     category: 'РАЗЪЁМЫ',
     subclass: 'Сетевые',
     location: '',
@@ -261,7 +244,6 @@ export const initialItems: WarehouseItem[] = [
     location: '',
     description: 'BC501SM (аналог BH500)',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/battery-holder-bc/400/300',
     updatedAt: Date.now()
   },
   {
@@ -274,7 +256,6 @@ export const initialItems: WarehouseItem[] = [
     location: '157',
     description: 'BH-2032-CH26 держатель батар',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/cr2032-holder/400/300',
     updatedAt: Date.now()
   },
   {
@@ -287,7 +268,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 3',
     description: 'BH500 EEMB (аналог BC501SM)',
     lastChecked: '01.04.2019',
-    imageUrl: 'https://picsum.photos/seed/bh500/400/300',
     updatedAt: Date.now()
   },
   {
@@ -300,7 +280,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 2',
     description: 'BNC-C174P',
     lastChecked: '31.05.2023',
-    imageUrl: 'https://picsum.photos/seed/bnc-c174p/400/300',
     updatedAt: Date.now()
   },
   {
@@ -313,7 +292,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 2',
     description: 'BNC-174U',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/bnc-174u/400/300',
     updatedAt: Date.now()
   },
   {
@@ -326,7 +304,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 2',
     description: 'BNC-174 (масса отдельная)',
     lastChecked: '31.05.2023',
-    imageUrl: 'https://picsum.photos/seed/bnc-mass/400/300',
     updatedAt: Date.now()
   },
   {
@@ -339,7 +316,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 2',
     description: 'BNC-C58P',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/bnc-c58p/400/300',
     updatedAt: Date.now()
   },
   {
@@ -352,7 +328,6 @@ export const initialItems: WarehouseItem[] = [
     location: '157',
     description: 'CR2032-LD-A07932 (4 штуки без разъема)',
     lastChecked: '26.09.2023',
-    imageUrl: 'https://picsum.photos/seed/cr2032-battery/400/300',
     updatedAt: Date.now()
   },
   {
@@ -365,7 +340,6 @@ export const initialItems: WarehouseItem[] = [
     location: '157',
     description: 'CWF-8R + CHU8 with contacts',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/cwf-chu/400/300',
     updatedAt: Date.now()
   },
   {
@@ -378,7 +352,6 @@ export const initialItems: WarehouseItem[] = [
     location: 'Стеллаж 1 Полка 2',
     description: 'D-32825 Blomberg клемные колодки (mcvw 1.5/8-stf-3.81)',
     lastChecked: '',
-    imageUrl: 'https://picsum.photos/seed/blomberg/400/300',
     updatedAt: Date.now()
   },
   {

@@ -11,9 +11,7 @@ export interface WarehouseItem {
   sku?: string;
   quantity: number;
   minQuantity?: number;
-  unit?: string;
   specs?: string;
-  weight?: string;
   category: string;
   subclass: string;
   location: string;
@@ -21,6 +19,13 @@ export interface WarehouseItem {
   lastChecked?: string;
   imageUrl?: string;
   imageUrls?: string[];
+  updatedAt: number;
+}
+
+export interface Category {
+  id: string;
+  name: string;
+  subclasses: string[];
   updatedAt: number;
 }
 

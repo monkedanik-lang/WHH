@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { 
   Plus, 
   Search, 
@@ -12,6 +12,7 @@ import {
   ChevronDown, 
   ChevronRight,
   X,
+  RefreshCw,
   Download,
   Printer,
   Save,
@@ -25,10 +26,10 @@ import {
   Moon
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { motion, AnimatePresence } from 'motion/react';
+import { WarehouseItem, ItemFormData, Location, Category } from './types';
 import { cn } from './lib/utils';
-import { WarehouseItem, ItemFormData, Location } from './types';
 import { initialItems } from './data/initialItems';
 
 // --- Components ---
@@ -79,25 +80,23 @@ const ItemCard: React.FC<{
             {item.sku && (
               <span className="text-slate-400 dark:text-slate-500 text-xs font-mono">{item.sku}</span>
             )}
-            <div className="p-1 bg-white dark:bg-slate-800 rounded border border-slate-100 dark:border-slate-800 shadow-sm shrink-0">
+            <button 
+              onClick={(e) => { e.stopPropagation(); onViewQR(item); }}
+              className="p-1 bg-white dark:bg-slate-800 rounded border border-slate-100 dark:border-slate-800 shadow-sm shrink-0 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors"
+              title="Показать QR-код"
+            >
               <QRCodeSVG 
-                value={JSON.stringify({ id: item.id, sku: item.sku, name: item.name })}
+                value={item.sku || item.id}
                 size={16}
                 level="L"
               />
-            </div>
+            </button>
           </div>
           <h3 className="text-lg font-bold text-slate-900 dark:text-slate-100 group-hover:text-blue-600 transition-colors">{item.name}</h3>
         </div>
-        <button 
-          onClick={(e) => { e.stopPropagation(); onViewQR(item); }}
-          className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-slate-800 rounded-xl transition-all"
-        >
-          <QrCode size={20} />
-        </button>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         <div className="bg-slate-50 dark:bg-slate-800/50 p-3 rounded-xl">
           <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-1">Наличие</p>
           <div className="flex items-center gap-2">
@@ -105,7 +104,7 @@ const ItemCard: React.FC<{
               "text-xl font-bold",
               item.quantity <= (item.minQuantity ?? 5) ? "text-amber-600 dark:text-amber-400" : "text-slate-900 dark:text-slate-100"
             )}>
-              {item.quantity} <span className="text-sm font-medium opacity-70">{item.unit ?? 'шт'}</span>
+              {item.quantity}
             </span>
             {item.quantity <= (item.minQuantity ?? 5) && <AlertCircle size={16} className="text-amber-500" />}
           </div>
@@ -189,7 +188,7 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
 
   return (
     <div 
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
+      className="fixed inset-0 z-[3000] flex items-center justify-center p-4 bg-black/40 dark:bg-black/60 backdrop-blur-sm"
       onClick={onClose}
     >
       <motion.div 
@@ -197,7 +196,7 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
         animate={{ opacity: 1, scale: 1, y: 0 }}
         exit={{ opacity: 0, scale: 0.95, y: 20 }}
         onClick={(e) => e.stopPropagation()}
-        className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col border border-slate-200 dark:border-slate-800"
+        className="bg-white dark:bg-slate-900 rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col border border-slate-200 dark:border-slate-800"
       >
         <div className="px-6 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/50 flex-shrink-0">
           <h3 className="text-lg font-semibold text-slate-800 dark:text-slate-100">{title}</h3>
@@ -211,7 +210,7 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
             </button>
           </div>
         </div>
-        <div className="p-6 overflow-y-auto flex-1 custom-scrollbar">
+        <div className="p-4 sm:p-6 overflow-y-auto overflow-x-hidden flex-1 custom-scrollbar">
           {children}
         </div>
       </motion.div>
@@ -219,240 +218,300 @@ const Modal = ({ isOpen, onClose, title, children }: { isOpen: boolean; onClose:
   );
 };
 
-const QRScanner = ({ onScan, onClose }: { onScan: (data: string) => void; onClose: () => void }) => {
+const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { onScan: (data: string) => string | null; onClose: () => void; isPaused?: boolean; isFloating?: boolean }) => {
   const [error, setError] = useState<string | null>(null);
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [retryCount, setRetryCount] = useState(0);
+  const [isInitializing, setIsInitializing] = useState(false);
+  const [cameras, setCameras] = useState<any[]>([]);
+  const [currentCameraIndex, setCurrentCameraIndex] = useState<number | null>(null);
   const [isCameraStarted, setIsCameraStarted] = useState(false);
+  const [scannedResult, setScannedResult] = useState<string | null>(null);
+  const [isScanSuccess, setIsScanSuccess] = useState(false);
+  
   const scannerRef = useRef<Html5Qrcode | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const isMountedRef = useRef(true);
+  const onScanRef = useRef(onScan);
+  const isProcessingRef = useRef(false);
 
   useEffect(() => {
-    if (!isCameraStarted) return;
+    onScanRef.current = onScan;
+  }, [onScan]);
 
-    const elementId = "qr-reader";
-    let isMounted = true;
+  useEffect(() => {
+    const handlePauseResume = async () => {
+      if (scannerRef.current && isCameraStarted) {
+        try {
+          if (isPaused) {
+            await scannerRef.current.pause();
+          } else {
+            // If we're resuming from a successful scan, reset the states
+            if (isScanSuccess) {
+              setIsScanSuccess(false);
+              setScannedResult(null);
+              isProcessingRef.current = false;
+            }
+            await scannerRef.current.resume();
+          }
+        } catch (err) {
+          console.error("Scanner pause/resume error:", err);
+        }
+      }
+    };
+    handlePauseResume();
+  }, [isPaused, isCameraStarted, isScanSuccess]);
 
-    const startScanner = async () => {
-      setIsInitializing(true);
-      setError(null);
-      
+  useEffect(() => {
+    isMountedRef.current = true;
+    
+    const initCameras = async () => {
       try {
-        // 1. Check for secure context (HTTPS)
-        if (!window.isSecureContext) {
-          throw new Error("Камера требует защищенного соединения (HTTPS).");
-        }
-
-        // 2. Check for mediaDevices support
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          throw new Error("Ваш браузер не поддерживает доступ к камере или она заблокирована настройками конфиденциальности.");
-        }
-
-        // 3. Warm up camera with direct getUserMedia (iOS workaround)
-        // This is now triggered by a user gesture (button click)
-        try {
-          const stream = await navigator.mediaDevices.getUserMedia({ 
-            video: { facingMode: { ideal: 'environment' } } 
-          });
-          stream.getTracks().forEach(track => track.stop());
-        } catch (e) {
-          console.warn("Camera warmup failed:", e);
-          // Don't throw here, let html5-qrcode try its own way
-        }
-
-        // Wait for DOM
-        await new Promise(resolve => setTimeout(resolve, 500));
+        const devices = await Html5Qrcode.getCameras();
+        if (!isMountedRef.current) return;
         
-        if (!isMounted) return;
+        // Try to find the back cameras
+        const backCameras = devices.filter(device => 
+          device.label.toLowerCase().includes('back') || 
+          device.label.toLowerCase().includes('rear') ||
+          device.label.toLowerCase().includes('задняя') ||
+          device.label.toLowerCase().includes('environment') ||
+          device.label.toLowerCase().includes('основная') ||
+          device.label.toLowerCase().includes('внешняя')
+        );
 
-        const element = document.getElementById(elementId);
-        if (!element) {
-          throw new Error("Элемент для сканера не найден");
-        }
-
-        // Clean up previous instance if any
-        if (scannerRef.current) {
-          try {
-            await scannerRef.current.stop();
-          } catch (e) {
-            // Ignore stop errors
-          }
-        }
-
-        const html5QrCode = new Html5Qrcode(elementId);
-        scannerRef.current = html5QrCode;
-        
-        const config = { 
-          fps: 10,
-          qrbox: { width: 250, height: 250 },
-          aspectRatio: 1.0,
-          disableFlip: true
-        };
-
-        try {
-          // Try back camera first
-          await html5QrCode.start(
-            { facingMode: "environment" }, 
-            config, 
-            (decodedText: string) => {
-              onScan(decodedText);
-            },
-            () => {}
-          );
-        } catch (envErr) {
-          console.warn("Environment camera failed, trying fallback:", envErr);
-          
-          const devices = await Html5Qrcode.getCameras().catch(() => []);
-          if (devices && devices.length > 0) {
-            // Try the last camera (usually back)
-            const cameraId = devices[devices.length - 1].id;
-            await html5QrCode.start(
-              cameraId,
-              config,
-              (decodedText: string) => {
-                onScan(decodedText);
-              },
-              () => {}
-            );
+        if (backCameras.length > 0) {
+          setCameras(backCameras);
+          setCurrentCameraIndex(0);
+        } else {
+          setCameras(devices);
+          if (devices.length > 0) {
+            setCurrentCameraIndex(0);
           } else {
-            throw new Error("Задняя камера не найдена или доступ к ней запрещен.");
+            // No cameras found, but we can still try facingMode: environment
+            startScanner();
           }
         }
-        
-        if (isMounted) setIsInitializing(false);
-
-        // Extra fix for iOS: ensure video is playing and visible
-        const video = element.querySelector('video');
-        if (video) {
-          video.setAttribute('playsinline', 'true');
-          video.setAttribute('webkit-playsinline', 'true');
-          video.style.display = "block";
-          video.style.width = "100%";
-          video.style.height = "100%";
-          video.style.objectFit = "cover";
-          video.muted = true;
-          
-          setTimeout(() => {
-            video.play().catch(e => console.error("Video play failed", e));
-          }, 300);
-        }
-      } catch (err: any) {
-        console.error("Failed to start QR scanner:", err);
-        if (isMounted) {
-          let msg = "Не удалось запустить камеру.";
-          if (err.message?.includes("Permission denied") || err.name === "NotAllowedError") {
-            msg = "Доступ к камере отклонен. Пожалуйста, разрешите доступ в настройках браузера.";
-          } else if (err.name === "NotFoundError") {
-            msg = "Камера не найдена.";
-          } else if (err.name === "NotReadableError" || err.name === "TrackStartError") {
-            msg = "Камера уже используется другим приложением или заблокирована системой.";
-          } else if (err.message) {
-            msg = err.message;
-          } else {
-            msg = `Ошибка камеры: ${err.message || "Неизвестная ошибка"}.`;
-          }
-          setError(msg);
-          setIsInitializing(false);
-          setIsCameraStarted(false); // Allow user to try again manually
+      } catch (err) {
+        console.error("Camera detection error:", err);
+        // Even if detection fails, try starting with default facingMode
+        if (isMountedRef.current) {
+          startScanner();
         }
       }
     };
 
-    startScanner();
+    initCameras();
 
     return () => {
-      isMounted = false;
+      isMountedRef.current = false;
       if (scannerRef.current) {
-        scannerRef.current.stop().catch(err => console.error("Failed to stop scanner:", err));
+        scannerRef.current.stop().catch(() => {});
+        scannerRef.current = null;
       }
     };
-  }, [onScan, retryCount, isCameraStarted]);
+  }, []);
+
+  useEffect(() => {
+    if (currentCameraIndex !== null) {
+      startScanner();
+    }
+  }, [currentCameraIndex]);
+
+  const startScanner = async () => {
+    if (!isMountedRef.current || isInitializing) return;
+    
+    setIsInitializing(true);
+    setError(null);
+    
+    try {
+      if (scannerRef.current) {
+        await scannerRef.current.stop().catch(() => {});
+        scannerRef.current = null;
+      }
+
+      // Small delay to ensure DOM is ready and previous session is closed
+      await new Promise(r => setTimeout(r, 500));
+      if (!isMountedRef.current) return;
+
+      const elementId = "qr-reader";
+      const scanner = new Html5Qrcode(elementId, { verbose: false });
+      scannerRef.current = scanner;
+
+      const config = { 
+        fps: 20, // Increased FPS for faster recognition
+        qrbox: { width: 300, height: 300 }, // Fixed size matching UI
+        aspectRatio: 1.0
+      };
+
+      const source = (cameras.length > 0 && currentCameraIndex !== null) 
+        ? { deviceId: cameras[currentCameraIndex].id } 
+        : { facingMode: "environment" };
+
+      await scanner.start(
+        source,
+        config,
+        (text) => {
+          if (isMountedRef.current && !isProcessingRef.current) {
+            isProcessingRef.current = true;
+            
+            // Provide haptic feedback if available
+            if (window.navigator.vibrate) {
+              window.navigator.vibrate(100);
+            }
+
+            const resultName = onScanRef.current(text);
+            if (resultName) {
+              setScannedResult(resultName);
+              setIsScanSuccess(true);
+              
+              // Pause scanner to show result
+              scannerRef.current?.pause().catch(() => {});
+              
+              // We no longer close automatically. 
+              // The parent will pause us if a modal is opened.
+              // When the modal closes, we will resume via the isPaused effect.
+            } else {
+              // If no match found, resume after a short delay to allow re-scanning
+              setTimeout(() => {
+                isProcessingRef.current = false;
+              }, 2000);
+            }
+          }
+        },
+        () => {} // silent failure for frames
+      );
+
+      if (isMountedRef.current) {
+        setIsCameraStarted(true);
+        setIsInitializing(false);
+      }
+    } catch (err: any) {
+      console.error("Scanner start error:", err);
+      if (isMountedRef.current) {
+        setError(err.message || "Ошибка запуска камеры");
+        setIsInitializing(false);
+        setIsCameraStarted(false);
+      }
+    }
+  };
 
   return (
-    <div className="space-y-4">
-      <div className="relative">
-        <div 
-          id="qr-reader" 
-          key={`qr-reader-${retryCount}`}
-          className="overflow-hidden rounded-2xl border-2 border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 w-full h-[300px] flex items-center justify-center"
+    <div className="flex flex-col h-full bg-black relative overflow-hidden">
+      {/* Header Controls */}
+      <div className="absolute top-0 left-0 right-0 z-[1000] p-4 flex justify-end items-center pointer-events-none">
+        <button 
+          onClick={onClose}
+          className="p-3 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-md border border-white/20 shadow-lg transition-all active:scale-95 pointer-events-auto"
+          aria-label="Закрыть сканер"
         >
-          {!isCameraStarted && !error && (
-            <div className="flex flex-col items-center gap-4 p-6 text-center">
-              <div className="w-16 h-16 bg-blue-100 dark:bg-blue-900/30 rounded-full flex items-center justify-center text-blue-600">
-                <Camera className="w-8 h-8" />
-              </div>
-              <div className="space-y-2">
-                <h3 className="font-bold text-slate-900 dark:text-white">Сканер QR-кода</h3>
-                <p className="text-sm text-slate-500">Нажмите кнопку ниже, чтобы разрешить доступ к камере и начать сканирование.</p>
-              </div>
-              <button 
-                onClick={() => setIsCameraStarted(true)}
-                className="px-8 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm shadow-lg shadow-blue-500/20 hover:bg-blue-700 transition-all active:scale-95"
-              >
-                Включить камеру
-              </button>
-            </div>
-          )}
+          <X size={24} />
+        </button>
+      </div>
 
-          {isCameraStarted && isInitializing && !error && (
-            <div className="flex flex-col items-center gap-4">
-              <div className="w-8 h-8 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-              <div className="text-center space-y-2">
-                <p className="text-sm text-slate-500">Запуск камеры...</p>
-              </div>
+      <div id="qr-reader" ref={containerRef} className="flex-1 w-full h-full relative">
+        {isCameraStarted && !isInitializing && (
+          <div className="absolute inset-0 pointer-events-none z-[50] flex items-center justify-center">
+            {/* Scan Area Highlight */}
+            <div className="w-[300px] h-[300px] border-2 border-blue-500/50 rounded-2xl relative overflow-hidden">
+              {/* Pulsing Corners */}
+              <div className="absolute top-0 left-0 w-10 h-10 border-t-4 border-l-4 border-blue-500 rounded-tl-lg animate-pulse" />
+              <div className="absolute top-0 right-0 w-10 h-10 border-t-4 border-r-4 border-blue-500 rounded-tr-lg animate-pulse" />
+              <div className="absolute bottom-0 left-0 w-10 h-10 border-b-4 border-l-4 border-blue-500 rounded-bl-lg animate-pulse" />
+              <div className="absolute bottom-0 right-0 w-10 h-10 border-b-4 border-r-4 border-blue-500 rounded-br-lg animate-pulse" />
+              
+              {/* Animated Scan Line */}
+              <div className="absolute top-0 left-0 right-0 h-1 bg-blue-500/50 shadow-[0_0_15px_rgba(59,130,246,0.5)] animate-[scan_2s_linear_infinite]" />
             </div>
-          )}
-          {error && (
-            <div className="p-6 text-center space-y-4">
-              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-2xl">
-                <AlertCircle className="mx-auto text-rose-500 mb-2" size={32} />
-                <p className="text-sm text-slate-600 dark:text-slate-400 font-medium leading-relaxed">{error}</p>
-                
-                <div className="mt-4 text-xs text-slate-500 dark:text-slate-400 space-y-3 text-left bg-white/50 dark:bg-black/20 p-4 rounded-xl border border-rose-100 dark:border-rose-900/30">
-                  <p className="font-bold text-rose-600 dark:text-rose-400 border-b border-rose-100 dark:border-rose-900/30 pb-1 mb-2">Если не работает в Safari:</p>
-                  <ul className="space-y-2 list-disc pl-4">
-                    <li>Убедитесь, что вы <b>не</b> в режиме "Инкогнито".</li>
-                    <li>Зайдите в <b>Настройки iPhone</b> → <b>Safari</b> → <b>Камера</b> → выберите <b>"Разрешить"</b>.</li>
-                    <li>Если вы видите это сообщение внутри другого приложения (например, Telegram), нажмите кнопку <b>"Открыть в Safari"</b>.</li>
-                    {window.self !== window.top && (
-                      <li className="text-blue-600 dark:text-blue-400 font-bold">Нажмите кнопку "Открыть в новой вкладке" в углу экрана (справа сверху).</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-              <div className="flex flex-col gap-2">
-                <button 
-                  onClick={() => setIsCameraStarted(true)}
-                  className="w-full py-2 bg-blue-600 text-white rounded-xl font-bold text-sm hover:bg-blue-700 transition-all"
-                >
-                  Попробовать снова
-                </button>
-                <button 
-                  onClick={() => window.location.reload()}
-                  className="w-full py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-xl font-bold text-sm hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
-                >
-                  Обновить страницу
-                </button>
-              </div>
+            
+            {/* Status Label - Only show when detected or processing */}
+            <div className="absolute bottom-24 left-0 right-0 flex justify-center">
+              <AnimatePresence mode="wait">
+                {isScanSuccess ? (
+                  <motion.div 
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    exit={{ opacity: 0, y: -10 }}
+                    className="px-6 py-3 bg-green-500/90 backdrop-blur-md rounded-2xl border border-white/20 flex flex-col items-center gap-1 shadow-2xl"
+                  >
+                    <div className="flex items-center gap-2">
+                      <CheckCircle2 size={18} className="text-white" />
+                      <span className="text-white text-sm font-bold uppercase tracking-widest">Найдено!</span>
+                    </div>
+                    <span className="text-white text-xs opacity-90 font-medium truncate max-w-[200px]">{scannedResult}</span>
+                  </motion.div>
+                ) : (
+                  <motion.div 
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    className="flex flex-col items-center gap-3"
+                  >
+                    <div className="px-4 py-2 bg-black/40 backdrop-blur-md rounded-full border border-white/10 flex items-center gap-2">
+                      <div className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                      <span className="text-white text-xs font-medium uppercase tracking-widest opacity-60">Наведите на QR-код</span>
+                    </div>
+                    <p className="text-white/40 text-[10px] font-medium uppercase tracking-tighter text-center max-w-[200px]">
+                      Обеспечьте хорошее освещение и держите код в центре рамки
+                    </p>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
-          )}
-        </div>
-        {!error && !isInitializing && (
-          <div className="absolute inset-0 border-2 border-blue-500/30 rounded-2xl pointer-events-none">
-            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-48 h-48 border-2 border-blue-500 rounded-xl opacity-50"></div>
           </div>
         )}
       </div>
-      
-      <p className="text-center text-sm text-slate-500 dark:text-slate-400">
-        Наведите камеру на QR-код товара
-      </p>
-      
-      <button
-        onClick={onClose}
-        className="w-full py-3 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
-      >
-        Закрыть
-      </button>
+
+      {!isCameraStarted && !isInitializing && error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 text-white p-6 text-center z-[100]">
+          <div className="w-20 h-20 bg-red-500/20 rounded-full flex items-center justify-center mb-4">
+            <AlertCircle size={40} className="text-red-400" />
+          </div>
+          <h3 className="text-xl font-bold mb-2">Ошибка камеры</h3>
+          <p className="text-slate-400 mb-6 text-sm">{error}</p>
+          <div className="flex flex-col gap-3 w-full max-w-xs">
+            <button 
+              onClick={startScanner}
+              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xl shadow-blue-900/20 transition-all active:scale-95"
+            >
+              Попробовать снова
+            </button>
+            <button 
+              onClick={onClose}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium transition-all"
+            >
+              Закрыть
+            </button>
+          </div>
+        </div>
+      )}
+
+      {isInitializing && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm z-[200]">
+          <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
+          <p className="text-white font-medium mb-6">Инициализация камеры...</p>
+          <button 
+            onClick={onClose}
+            className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all"
+          >
+            Отмена
+          </button>
+        </div>
+      )}
+
+      <style>{`
+        #qr-reader video {
+          width: 100% !important;
+          height: 100% !important;
+          object-fit: cover !important;
+        }
+        #qr-reader canvas {
+          display: none !important;
+        }
+        #qr-reader__status_span {
+          display: none !important;
+        }
+        #qr-reader__dashboard {
+          display: none !important;
+        }
+      `}</style>
     </div>
   );
 };
@@ -461,16 +520,14 @@ const ItemForm = ({
   initialData, 
   onSubmit, 
   onCancel,
-  existingCategories,
-  existingSubclasses,
+  categories,
   existingLocations,
   onAddLocation
 }: { 
   initialData?: WarehouseItem; 
   onSubmit: (data: ItemFormData) => void; 
   onCancel: () => void;
-  existingCategories: string[];
-  existingSubclasses: string[];
+  categories: Category[];
   existingLocations: string[];
   onAddLocation?: () => void;
 }) => {
@@ -480,9 +537,7 @@ const ItemForm = ({
       sku: '',
       quantity: 0,
       minQuantity: 5,
-      unit: 'шт',
       specs: '',
-      weight: '',
       category: '',
       subclass: '',
       location: '',
@@ -497,6 +552,9 @@ const ItemForm = ({
     }
     return data;
   });
+
+  const selectedCategoryData = categories.find(c => c.name === formData.category);
+  const subclassesForCategory = selectedCategoryData ? selectedCategoryData.subclasses : [];
 
   const handleAddImageUrl = () => {
     if ((formData.imageUrls?.length || 0) < 3) {
@@ -553,7 +611,7 @@ const ItemForm = ({
           placeholder="Напр. Болт М10"
         />
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Артикул (SKU)</label>
           <input
@@ -566,29 +624,18 @@ const ItemForm = ({
         </div>
         <div className="space-y-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Количество</label>
-          <div className="flex gap-2">
-            <input
-              required
-              type="number"
-              min="0"
-              value={formData.quantity}
-              onChange={e => setFormData({ ...formData, quantity: parseInt(e.target.value) || 0 })}
-              className="flex-1 px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all dark:text-slate-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
-              placeholder="0"
-            />
-            <input
-              required
-              type="text"
-              value={formData.unit || 'шт'}
-              onChange={e => setFormData({ ...formData, unit: e.target.value })}
-              className="w-20 px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all dark:text-slate-100"
-              placeholder="ед."
-              title="Единица измерения"
-            />
-          </div>
+          <input
+            required
+            type="number"
+            min="0"
+            value={formData.quantity}
+            onChange={e => setFormData({ ...formData, quantity: parseInt(e.target.value) || 0 })}
+            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all dark:text-slate-100 [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+            placeholder="0"
+          />
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Мин. остаток</label>
           <input
@@ -598,16 +645,6 @@ const ItemForm = ({
             value={formData.minQuantity ?? 5}
             onChange={e => setFormData({ ...formData, minQuantity: parseInt(e.target.value) || 0 })}
             className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all dark:text-slate-100"
-          />
-        </div>
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Вес</label>
-          <input
-            type="text"
-            value={formData.weight || ''}
-            onChange={e => setFormData({ ...formData, weight: e.target.value })}
-            className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent outline-none transition-all dark:text-slate-100"
-            placeholder="0.5 кг"
           />
         </div>
       </div>
@@ -692,7 +729,7 @@ const ItemForm = ({
           )}
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Категория</label>
           <input
@@ -704,7 +741,7 @@ const ItemForm = ({
             list="categories-list"
           />
           <datalist id="categories-list">
-            {existingCategories.map(c => <option key={c} value={c} />)}
+            {categories.map(c => <option key={c.id} value={c.name} />)}
           </datalist>
         </div>
         <div className="space-y-1">
@@ -718,11 +755,11 @@ const ItemForm = ({
             list="subclasses-list"
           />
           <datalist id="subclasses-list">
-            {existingSubclasses.map(s => <option key={s} value={s} />)}
+            {subclassesForCategory.map((s, idx) => <option key={`${s}-${idx}`} value={s} />)}
           </datalist>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="space-y-1">
           <label className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Дата сверки</label>
           <input
@@ -745,15 +782,15 @@ const ItemForm = ({
               list="locations-list"
             />
             <datalist id="locations-list">
-              {existingLocations.sort().map(l => (
-                <option key={l} value={l} />
+              {existingLocations.sort().map((l, idx) => (
+                <option key={`${l}-${idx}`} value={l} />
               ))}
             </datalist>
             {onAddLocation && (
               <button
                 type="button"
                 onClick={onAddLocation}
-                className="p-2 bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                className="flex items-center justify-center w-10 h-[42px] bg-slate-100 dark:bg-slate-800 text-slate-500 dark:text-slate-400 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 transition-all shrink-0"
                 title="Добавить новую локацию"
               >
                 <Plus size={20} />
@@ -773,7 +810,7 @@ const ItemForm = ({
         />
       </div>
     </div>
-    <div className="flex gap-3 pt-6 mt-4 border-t border-slate-100 dark:border-slate-800">
+    <div className="flex flex-col sm:flex-row gap-3 pt-6 mt-4 border-t border-slate-100 dark:border-slate-800">
         <button
           type="button"
           onClick={onCancel}
@@ -813,7 +850,7 @@ const ItemDetails: React.FC<{
     <div className="space-y-6">
       {images.length > 0 && (
         <div className="space-y-3">
-          <div className="relative h-64 overflow-hidden bg-white dark:bg-slate-800 p-8 rounded-2xl border border-slate-100 dark:border-slate-700 flex items-center justify-center">
+          <div className="relative h-48 sm:h-64 overflow-hidden bg-white dark:bg-slate-800 p-4 sm:p-8 rounded-2xl border border-slate-100 dark:border-slate-700 flex items-center justify-center">
             <img 
               src={images[activeImageIndex]} 
               alt={item.name}
@@ -822,7 +859,7 @@ const ItemDetails: React.FC<{
             />
           </div>
           {images.length > 1 && (
-            <div className="flex gap-2 justify-center overflow-x-auto py-1">
+            <div className="flex gap-2 justify-center overflow-x-auto py-1 custom-scrollbar">
               {images.map((img, idx) => (
                 <button
                   key={idx}
@@ -840,7 +877,7 @@ const ItemDetails: React.FC<{
         </div>
       )}
       
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl">
           <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-1">Артикул</p>
           <p className="text-lg font-mono font-bold text-slate-900 dark:text-slate-100">{item.sku || '—'}</p>
@@ -852,7 +889,7 @@ const ItemDetails: React.FC<{
           </div>
           <div className="bg-white dark:bg-slate-800 p-1.5 rounded-lg border border-slate-100 dark:border-slate-700">
             <QRCodeSVG 
-              value={JSON.stringify({ id: item.id, sku: item.sku, name: item.name })}
+              value={item.sku || item.id}
               size={40}
               level="L"
             />
@@ -860,11 +897,11 @@ const ItemDetails: React.FC<{
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4 mb-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-6">
         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl">
           <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider mb-1">Наличие</p>
           <p className="text-lg font-bold text-slate-900 dark:text-slate-100">
-            {item.quantity} <span className="text-sm font-medium opacity-70">{item.unit ?? 'шт'}</span>
+            {item.quantity}
           </p>
         </div>
         <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl">
@@ -894,16 +931,6 @@ const ItemDetails: React.FC<{
           </div>
         </div>
       )}
-
-      {item.weight && (
-        <div className="flex items-start gap-3">
-          <Package className="text-slate-400 mt-1 shrink-0" size={18} />
-          <div>
-            <p className="text-[10px] text-slate-500 dark:text-slate-400 font-bold uppercase tracking-wider">Вес</p>
-            <p className="text-slate-900 dark:text-slate-100 font-medium">{item.weight}</p>
-          </div>
-        </div>
-      )}
     </div>
 
     <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
@@ -913,20 +940,29 @@ const ItemDetails: React.FC<{
       </p>
     </div>
 
-    <div className="flex gap-3 pt-4">
+    <div className="flex flex-col gap-3 pt-4">
+      <div className="flex flex-col sm:flex-row gap-3">
+        <button
+          onClick={() => { onEdit(item); }}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-all font-bold"
+        >
+          <Edit2 size={18} />
+          Редактировать
+        </button>
+        <button
+          onClick={() => { onDelete(item); }}
+          className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-xl hover:bg-rose-100 dark:hover:bg-rose-900/30 transition-all font-bold"
+        >
+          <Trash2 size={18} />
+          Удалить
+        </button>
+      </div>
       <button
-        onClick={() => { onEdit(item); }}
-        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-xl hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-all font-bold"
+        onClick={onClose}
+        className="w-full flex items-center justify-center gap-2 px-4 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all font-bold"
       >
-        <Edit2 size={18} />
-        Редактировать
-      </button>
-      <button
-        onClick={() => { onClose(); onDelete(item); }}
-        className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 rounded-xl hover:bg-rose-100 dark:hover:bg-rose-900/30 transition-all font-bold"
-      >
-        <Trash2 size={18} />
-        Удалить
+        <X size={18} />
+        Закрыть
       </button>
     </div>
   </div>
@@ -978,8 +1014,32 @@ export default function App() {
       updatedAt: Date.now()
     }));
   });
+
+  const [categories, setCategories] = useState<Category[]>(() => {
+    const saved = localStorage.getItem('warehouse_categories');
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) return parsed;
+      } catch (e) {
+        console.error("Failed to parse saved categories", e);
+      }
+    }
+    
+    // Инициализируем из текущих товаров, если пусто
+    const uniqueCategories = Array.from(new Set(initialItems.map(i => i.category).filter(Boolean)));
+    return uniqueCategories.map(name => ({
+      id: Math.random().toString(36).substring(2, 11),
+      name,
+      subclasses: Array.from(new Set(initialItems.filter(i => i.category === name).map(i => i.subclass).filter(Boolean))),
+      updatedAt: Date.now()
+    }));
+  });
   
   const [searchQuery, setSearchQuery] = useState('');
+  const [isSearchFinalized, setIsSearchFinalized] = useState(false);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const searchRef = useRef<HTMLDivElement>(null);
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [isScannerOpen, setIsScannerOpen] = useState(false);
   const [prefilledData, setPrefilledData] = useState<Partial<ItemFormData> | null>(null);
@@ -1002,6 +1062,18 @@ export default function App() {
   const [expandedCategories, setExpandedCategories] = useState<string[]>([]);
   const [locationToRename, setLocationToRename] = useState<string | null>(null);
   const [newLocationName, setNewLocationName] = useState('');
+  
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+  const [addCategoryInput, setAddCategoryInput] = useState('');
+  const [categoryToDelete, setCategoryToDelete] = useState<string | null>(null);
+  const [categoryToRename, setCategoryToRename] = useState<string | null>(null);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  
+  const [isAddingSubclass, setIsAddingSubclass] = useState<string | null>(null); // category name
+  const [addSubclassInput, setAddSubclassInput] = useState('');
+  const [subclassToDelete, setSubclassToDelete] = useState<{category: string, subclass: string} | null>(null);
+  const [subclassToRename, setSubclassToRename] = useState<{category: string, subclass: string} | null>(null);
+  const [newSubclassName, setNewSubclassName] = useState('');
   const [addLocationInput, setAddLocationInput] = useState('');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     const saved = localStorage.getItem('warehouse_theme');
@@ -1025,6 +1097,10 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('warehouse_locations', JSON.stringify(locations));
   }, [locations]);
+
+  useEffect(() => {
+    localStorage.setItem('warehouse_categories', JSON.stringify(categories));
+  }, [categories]);
 
   useEffect(() => {
     if (isCategoryModalOpen && selectedCategory) {
@@ -1072,25 +1148,27 @@ export default function App() {
   const handleDeleteItem = (id: string) => {
     setItems(items.filter(item => item.id !== id));
     setItemToDelete(null);
+    setViewingItem(null);
   };
 
   const handleRenameLocation = (oldName: string, newName: string) => {
-    if (!newName.trim() || oldName === newName) {
+    const trimmedNewName = newName.trim();
+    if (!trimmedNewName || oldName === trimmedNewName || locations.some(l => l.name === trimmedNewName)) {
       setLocationToRename(null);
       return;
     }
     
     // Обновляем товары
     setItems(items.map(item => 
-      item.location === oldName ? { ...item, location: newName, updatedAt: Date.now() } : item
+      item.location === oldName ? { ...item, location: trimmedNewName, updatedAt: Date.now() } : item
     ));
     
     // Обновляем список локаций
     setLocations(locations.map(loc => 
-      loc.name === oldName ? { ...loc, name: newName, updatedAt: Date.now() } : loc
+      loc.name === oldName ? { ...loc, name: trimmedNewName, updatedAt: Date.now() } : loc
     ));
 
-    if (selectedLocation === oldName) setSelectedLocation(newName);
+    if (selectedLocation === oldName) setSelectedLocation(trimmedNewName);
     setLocationToRename(null);
     setNewLocationName('');
   };
@@ -1114,15 +1192,129 @@ export default function App() {
     setLocationToDelete(null);
   };
 
+  const handleAddCategory = (name: string) => {
+    if (!name.trim() || categories.some(c => c.name === name)) return;
+    const newCat: Category = {
+      id: Math.random().toString(36).substring(2, 11),
+      name: name.trim(),
+      subclasses: [],
+      updatedAt: Date.now()
+    };
+    setCategories([newCat, ...categories]);
+  };
+
+  const handleRenameCategory = (oldName: string, newName: string) => {
+    if (!newName.trim() || categories.some(c => c.name === newName)) return;
+    setItems(items.map(item => 
+      item.category === oldName ? { ...item, category: newName.trim(), updatedAt: Date.now() } : item
+    ));
+    setCategories(categories.map(c => 
+      c.name === oldName ? { ...c, name: newName.trim(), updatedAt: Date.now() } : c
+    ));
+    if (selectedCategory === oldName) setSelectedCategory(newName.trim());
+    setCategoryToRename(null);
+  };
+
+  const handleDeleteCategory = (name: string) => {
+    setItems(items.map(item => 
+      item.category === name ? { ...item, category: '', subclass: '', updatedAt: Date.now() } : item
+    ));
+    setCategories(categories.filter(c => c.name !== name));
+    if (selectedCategory === name) {
+      setSelectedCategory(null);
+      setSelectedSubclass(null);
+    }
+    setCategoryToDelete(null);
+  };
+
+  const handleAddSubclass = (categoryName: string, subName: string) => {
+    if (!subName.trim()) return;
+    setCategories(categories.map(c => {
+      if (c.name === categoryName) {
+        if (c.subclasses.includes(subName.trim())) return c;
+        return { ...c, subclasses: [...c.subclasses, subName.trim()], updatedAt: Date.now() };
+      }
+      return c;
+    }));
+  };
+
+  const handleRenameSubclass = (categoryName: string, oldSub: string, newSub: string) => {
+    const trimmedNewSub = newSub.trim();
+    if (!trimmedNewSub || oldSub === trimmedNewSub) {
+      setSubclassToRename(null);
+      return;
+    }
+
+    // Проверяем на дубликаты в этой категории
+    const category = categories.find(c => c.name === categoryName);
+    if (category?.subclasses.includes(trimmedNewSub)) {
+      setSubclassToRename(null);
+      return;
+    }
+
+    setItems(items.map(item => 
+      (item.category === categoryName && item.subclass === oldSub) 
+        ? { ...item, subclass: trimmedNewSub, updatedAt: Date.now() } 
+        : item
+    ));
+    setCategories(categories.map(c => {
+      if (c.name === categoryName) {
+        return { 
+          ...c, 
+          subclasses: c.subclasses.map(s => s === oldSub ? trimmedNewSub : s),
+          updatedAt: Date.now() 
+        };
+      }
+      return c;
+    }));
+    if (selectedCategory === categoryName && selectedSubclass === oldSub) setSelectedSubclass(trimmedNewSub);
+    setSubclassToRename(null);
+  };
+
+  const handleDeleteSubclass = (categoryName: string, subName: string) => {
+    setItems(items.map(item => 
+      (item.category === categoryName && item.subclass === subName) 
+        ? { ...item, subclass: '', updatedAt: Date.now() } 
+        : item
+    ));
+    setCategories(categories.map(c => {
+      if (c.name === categoryName) {
+        return { 
+          ...c, 
+          subclasses: c.subclasses.filter(s => s !== subName),
+          updatedAt: Date.now() 
+        };
+      }
+      return c;
+    }));
+    if (selectedCategory === categoryName && selectedSubclass === subName) setSelectedSubclass(null);
+    setSubclassToDelete(null);
+  };
+
   const filteredAndSortedItems = useMemo(() => {
     let result = items
-      .filter(item => 
-        item.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        (item.sku?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-        item.category.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.subclass.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        item.location.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      .filter(item => {
+        const query = searchQuery.toLowerCase().trim();
+        if (!query) return true;
+
+        if (isSearchFinalized) {
+          return (
+            item.name.toLowerCase() === query ||
+            (item.sku?.toLowerCase() || '') === query ||
+            item.category.toLowerCase() === query ||
+            item.subclass.toLowerCase() === query ||
+            item.location.toLowerCase() === query
+          );
+        }
+
+        return (
+          item.name.toLowerCase().includes(query) ||
+          (item.sku?.toLowerCase() || '').includes(query) ||
+          item.category.toLowerCase().includes(query) ||
+          item.subclass.toLowerCase().includes(query) ||
+          item.location.toLowerCase().includes(query)
+        );
+      });
 
     if (activeTab === 'low') {
       result = result.filter(item => item.quantity <= (item.minQuantity ?? 5));
@@ -1154,6 +1346,45 @@ export default function App() {
     });
   }, [items, searchQuery, sortBy, sortOrder, activeTab]);
 
+  const searchSuggestions = useMemo(() => {
+    if (!searchQuery.trim() || isSearchFinalized) return [];
+    
+    const query = searchQuery.toLowerCase().trim();
+    const suggestions = new Set<string>();
+    
+    items.forEach(item => {
+      if (item.name.toLowerCase().includes(query)) suggestions.add(item.name);
+      if (item.sku?.toLowerCase().includes(query)) suggestions.add(item.sku);
+      if (item.category.toLowerCase().includes(query)) suggestions.add(item.category);
+      if (item.subclass.toLowerCase().includes(query)) suggestions.add(item.subclass);
+      if (item.location.toLowerCase().includes(query)) suggestions.add(item.location);
+    });
+    
+    return Array.from(suggestions).slice(0, 8); // Limit to 8 suggestions
+  }, [items, searchQuery, isSearchFinalized]);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (searchRef.current && !searchRef.current.contains(event.target as Node)) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const handleSearchChange = (val: string) => {
+    setSearchQuery(val);
+    setIsSearchFinalized(false);
+    setShowSuggestions(true);
+  };
+
+  const finalizeSearch = useCallback((val?: string) => {
+    if (val !== undefined) setSearchQuery(val);
+    setIsSearchFinalized(true);
+    setShowSuggestions(false);
+  }, []);
+
   const toggleSort = (field: 'name' | 'quantity' | 'updatedAt') => {
     if (sortBy === field) {
       setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
@@ -1163,49 +1394,76 @@ export default function App() {
     }
   };
 
-  const handleQRScan = (decodedText: string) => {
-    setIsScannerOpen(false);
-    try {
-      // Try to parse as JSON (our internal format)
-      const data = JSON.parse(decodedText);
-      
-      // If it has an ID, try to find it (Search)
-      if (data.id) {
-        const item = items.find(i => i.id === data.id);
-        if (item) {
-          setSearchQuery(item.sku); // Jump to item by SKU
-          return;
-        }
-      }
-      
-      // If it's a new item or external data, prefill the add form
-      setPrefilledData({
-        name: data.name || '',
-        sku: data.sku || decodedText, // Use raw text as SKU if not JSON
-        category: data.category || '',
-        subclass: data.subclass || '',
-        location: data.location || '',
-        quantity: data.quantity || 0,
-        minQuantity: data.minQuantity || 5,
-        unit: data.unit || 'шт',
-        specs: data.specs || '',
-        weight: data.weight || '',
-        description: data.description || '',
-        lastChecked: data.lastChecked || '',
-        imageUrl: data.imageUrl || ''
-      });
-      setIsAddModalOpen(true);
-    } catch (e) {
-      // If not JSON, treat raw text as SKU for searching or adding
-      const item = items.find(i => i.sku === decodedText || i.name === decodedText);
-      if (item) {
-        setSearchQuery(item.sku);
-      } else {
-        setPrefilledData({ sku: decodedText });
-        setIsAddModalOpen(true);
-      }
+  const handleQRScan = useCallback((decodedText: string): string | null => {
+    const cleanText = decodedText.trim();
+    const lowerText = cleanText.toLowerCase();
+
+    // 1. First, try to find by SKU, ID or Name directly (case-insensitive)
+    const item = items.find(i => 
+      i.sku?.toLowerCase() === lowerText || 
+      i.id?.toLowerCase() === lowerText || 
+      i.name?.toLowerCase() === lowerText
+    );
+
+    if (item) {
+      setViewingItem(item);
+      return item.name;
     }
-  };
+
+    // 2. If not found, try to parse as JSON (for backward compatibility or complex codes)
+    try {
+      const data = JSON.parse(cleanText);
+      
+      // If it has an ID or SKU, try to find it
+      const jsonItem = items.find(i => 
+        (data.id && i.id === data.id) || 
+        (data.sku && i.sku === data.sku) ||
+        (data.name && i.name.toLowerCase() === data.name.toLowerCase())
+      );
+
+      if (jsonItem) {
+        setViewingItem(jsonItem);
+        return jsonItem.name;
+      }
+
+      // If it's a valid JSON but item not found, it might be a new item template
+      if (data.sku || data.name) {
+        setPrefilledData({
+          name: data.name || '',
+          sku: data.sku || cleanText,
+          category: data.category || '',
+          subclass: data.subclass || '',
+          location: data.location || '',
+          quantity: data.quantity || 0,
+          minQuantity: data.minQuantity || 5,
+          specs: data.specs || '',
+          description: data.description || '',
+          lastChecked: data.lastChecked || '',
+          imageUrl: data.imageUrl || ''
+        });
+        setIsAddModalOpen(true);
+        return data.name || "Новая позиция";
+      }
+    } catch (e) {
+      // Not JSON, that's fine
+    }
+
+    // 3. If no exact match and not a valid item JSON, use as search query
+    setSearchQuery(cleanText);
+    setIsSearchFinalized(true);
+    
+    // Check if we have any partial matches
+    const partialMatches = items.filter(i => 
+      i.name.toLowerCase().includes(lowerText) || 
+      i.sku?.toLowerCase().includes(lowerText)
+    );
+
+    if (partialMatches.length === 0) {
+      return "Ничего не найдено";
+    }
+    
+    return `Поиск: ${cleanText}`;
+  }, [items]);
 
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 pb-20 transition-colors duration-300">
@@ -1264,21 +1522,63 @@ export default function App() {
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Search Bar */}
-        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm mb-8 flex items-center">
-          <div className="relative flex-1 w-full">
+        <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm mb-8 flex items-center gap-4">
+          <div className="relative flex-1 w-full" ref={searchRef}>
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 dark:text-slate-500" size={20} />
             <input
               type="text"
               placeholder="Поиск по названию, SKU, категории..."
               value={searchQuery}
-              onChange={e => setSearchQuery(e.target.value)}
-              className="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-slate-100"
+              onChange={e => handleSearchChange(e.target.value)}
+              onFocus={() => setShowSuggestions(true)}
+              onKeyDown={e => {
+                if (e.key === 'Enter') finalizeSearch();
+              }}
+              className="w-full pl-10 pr-10 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl focus:ring-2 focus:ring-blue-500 outline-none transition-all dark:text-slate-100"
             />
+            {searchQuery && (
+              <button
+                onClick={() => handleSearchChange('')}
+                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 transition-colors"
+              >
+                <X size={16} />
+              </button>
+            )}
+            
+            {/* Suggestions Dropdown */}
+            <AnimatePresence>
+              {showSuggestions && searchSuggestions.length > 0 && (
+                <motion.div
+                  initial={{ opacity: 0, y: -10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -10 }}
+                  className="absolute top-full left-0 right-0 mt-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-30 overflow-hidden"
+                >
+                  {searchSuggestions.map((suggestion, idx) => (
+                    <button
+                      key={idx}
+                      type="button"
+                      onClick={() => finalizeSearch(suggestion)}
+                      className="w-full px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors flex items-center gap-3 border-b border-slate-50 dark:border-slate-800 last:border-0"
+                    >
+                      <Search size={14} className="text-slate-400" />
+                      <span className="text-sm text-slate-700 dark:text-slate-200 truncate">{suggestion}</span>
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
+          <button
+            onClick={() => finalizeSearch()}
+            className="px-6 py-2 bg-blue-600 text-white rounded-xl font-bold hover:bg-blue-700 transition-all shadow-lg shadow-blue-500/20 active:scale-95 whitespace-nowrap"
+          >
+            Найти
+          </button>
         </div>
 
         {/* Dashboard Summary / Tabs */}
-        <div className="grid grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 mb-8">
           <div 
             onClick={() => { setActiveTab('total'); setSelectedLocation(null); setSelectedCategory(null); }}
             className={cn(
@@ -1301,7 +1601,7 @@ export default function App() {
                 <Layers size={16} />
               </div>
             </div>
-            <p className="text-3xl font-black text-slate-900 dark:text-slate-100">{items.length}</p>
+            <p className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-slate-100">{items.length}</p>
           </div>
           <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-800 flex flex-col justify-between opacity-80">
             <div className="flex items-center justify-between mb-2">
@@ -1310,7 +1610,7 @@ export default function App() {
                 <Package className="text-indigo-600 dark:text-indigo-400" size={16} />
               </div>
             </div>
-            <p className="text-3xl font-black text-indigo-600 dark:text-indigo-400">
+            <p className="text-2xl sm:text-3xl font-black text-indigo-600 dark:text-indigo-400 truncate">
               {items.reduce((acc, item) => acc + item.quantity, 0).toLocaleString()}
             </p>
           </div>
@@ -1336,7 +1636,7 @@ export default function App() {
                 <AlertCircle size={16} />
               </div>
             </div>
-            <p className="text-3xl font-black text-amber-500 dark:text-amber-400">
+            <p className="text-2xl sm:text-3xl font-black text-amber-500 dark:text-amber-400">
               {items.filter(i => i.quantity <= (i.minQuantity ?? 5)).length}
             </p>
           </div>
@@ -1362,7 +1662,7 @@ export default function App() {
                 <Layers size={16} />
               </div>
             </div>
-            <p className="text-3xl font-black text-emerald-600 dark:text-emerald-400">
+            <p className="text-2xl sm:text-3xl font-black text-emerald-600 dark:text-emerald-400">
               {new Set(items.map(i => i.category)).size}
             </p>
           </div>
@@ -1388,7 +1688,7 @@ export default function App() {
                 <MapPin size={16} />
               </div>
             </div>
-            <p className="text-3xl font-black text-indigo-600 dark:text-indigo-400">
+            <p className="text-2xl sm:text-3xl font-black text-indigo-600 dark:text-indigo-400">
               {locations.length}
             </p>
           </div>
@@ -1531,22 +1831,27 @@ export default function App() {
         )}
       </main>
 
-      {/* Modals */}
-      <AnimatePresence>
-        {isScannerOpen && (
-          <Modal isOpen={true} onClose={() => setIsScannerOpen(false)} title="Сканирование QR-кода">
-            <QRScanner onScan={handleQRScan} onClose={() => setIsScannerOpen(false)} />
-          </Modal>
-        )}
+      {/* Centered Scanner */}
+      {isScannerOpen && (
+        <div className="fixed inset-0 z-[2000] flex items-center justify-center bg-black">
+          <div className="w-full h-full relative">
+            <QRScanner 
+              onScan={handleQRScan} 
+              onClose={() => setIsScannerOpen(false)} 
+              isPaused={!!viewingItem || !!editingItem || !!isAddModalOpen}
+            />
+          </div>
+        </div>
+      )}
 
+      <AnimatePresence>
         {isAddModalOpen && (
           <Modal isOpen={true} onClose={() => { setIsAddModalOpen(false); setPrefilledData(null); }} title="Добавить новый товар">
             <ItemForm 
               initialData={prefilledData ? { ...prefilledData, id: '', updatedAt: 0 } as WarehouseItem : undefined}
               onSubmit={handleAddItem} 
               onCancel={() => { setIsAddModalOpen(false); setPrefilledData(null); }} 
-              existingCategories={Array.from(new Set(items.map(i => i.category).filter(Boolean)))}
-              existingSubclasses={Array.from(new Set(items.map(i => i.subclass).filter(Boolean)))}
+              categories={categories}
               existingLocations={locations.map(l => l.name)}
               onAddLocation={() => {
                 setIsAddingLocation(true);
@@ -1573,8 +1878,7 @@ export default function App() {
               initialData={editingItem} 
               onSubmit={handleEditItem} 
               onCancel={() => setEditingItem(null)} 
-              existingCategories={Array.from(new Set(items.map(i => i.category).filter(Boolean)))}
-              existingSubclasses={Array.from(new Set(items.map(i => i.subclass).filter(Boolean)))}
+              categories={categories}
               existingLocations={locations.map(l => l.name)}
               onAddLocation={() => {
                 setIsAddingLocation(true);
@@ -1584,30 +1888,44 @@ export default function App() {
           </Modal>
         )}
 
+        {itemToDelete && (
+          <Modal isOpen={true} onClose={() => setItemToDelete(null)} title="Удалить товар">
+            <div className="flex flex-col items-center gap-4 py-2">
+              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-full text-rose-600 mb-2">
+                <AlertCircle size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-slate-600 dark:text-slate-400 mb-1">Вы уверены, что хотите удалить:</p>
+                <p className="text-lg font-bold text-slate-900 dark:text-slate-100">{itemToDelete.name}?</p>
+                <p className="text-sm text-slate-400 dark:text-slate-500 mt-2 font-mono">{itemToDelete.sku}</p>
+              </div>
+              <div className="flex gap-3 w-full mt-6">
+                <button 
+                  onClick={() => setItemToDelete(null)}
+                  className="flex-1 px-4 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all font-medium"
+                >
+                  Отмена
+                </button>
+                <button 
+                  onClick={() => handleDeleteItem(itemToDelete.id)}
+                  className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl hover:bg-rose-700 transition-all font-medium shadow-lg shadow-rose-100 dark:shadow-none"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
+
         {viewingQR && (
           <Modal isOpen={true} onClose={() => setViewingQR(null)} title="QR-код товара">
             <div className="flex flex-col items-center gap-6 py-4">
               <div className="bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-inner border border-slate-100 dark:border-slate-700">
                 <QRCodeSVG 
                   id="qr-code-svg"
-                  value={JSON.stringify({ 
-                    id: viewingQR.id, 
-                    sku: viewingQR.sku,
-                    name: viewingQR.name,
-                    category: viewingQR.category,
-                    subclass: viewingQR.subclass,
-                    location: viewingQR.location,
-                    quantity: viewingQR.quantity,
-                    minQuantity: viewingQR.minQuantity,
-                    unit: viewingQR.unit,
-                    specs: viewingQR.specs,
-                    weight: viewingQR.weight,
-                    description: viewingQR.description,
-                    lastChecked: viewingQR.lastChecked,
-                    imageUrl: viewingQR.imageUrl
-                  })} 
+                  value={viewingQR.sku || viewingQR.id} 
                   size={200}
-                  level="H"
+                  level="M"
                   includeMargin={true}
                 />
               </div>
@@ -1654,75 +1972,101 @@ export default function App() {
           </Modal>
         )}
 
-        {itemToDelete && (
-          <Modal isOpen={true} onClose={() => setItemToDelete(null)} title="Подтверждение удаления">
-            <div className="flex flex-col items-center gap-4 py-2">
-              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-full text-rose-600 mb-2">
-                <AlertCircle size={32} />
-              </div>
-              <div className="text-center">
-                <p className="text-slate-600 dark:text-slate-400 mb-1">Вы действительно хотите удалить товар:</p>
-                <p className="text-lg font-bold text-slate-900 dark:text-slate-100">{itemToDelete.name}?</p>
-                <p className="text-sm text-slate-400 dark:text-slate-500 mt-2">Это действие нельзя будет отменить.</p>
-              </div>
-              <div className="flex gap-3 w-full mt-6">
-                <button 
-                  onClick={() => setItemToDelete(null)}
-                  className="flex-1 px-4 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all font-medium"
-                >
-                  Отмена
-                </button>
-                <button 
-                  onClick={() => handleDeleteItem(itemToDelete.id)}
-                  className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl hover:bg-rose-700 transition-all font-medium shadow-lg shadow-rose-100 dark:shadow-none"
-                >
-                  Удалить
-                </button>
-              </div>
-            </div>
-          </Modal>
-        )}
-
         {isCategoryModalOpen && (
           <Modal 
             isOpen={true} 
-            onClose={() => setIsCategoryModalOpen(false)} 
-            title="Выбор категории и подкласса"
+            onClose={() => {
+              setIsCategoryModalOpen(false);
+              setIsAddingCategory(false);
+              setIsAddingSubclass(null);
+            }} 
+            title="Категории и подклассы"
           >
-            <div className="space-y-4 max-h-[60vh] overflow-y-auto pr-2 custom-scrollbar">
-              <button
-                onClick={() => {
-                  setSelectedCategory(null);
-                  setSelectedSubclass(null);
-                  setIsCategoryModalOpen(false);
-                }}
-                className={cn(
-                  "w-full flex items-center justify-between p-4 rounded-xl border transition-all",
-                  selectedCategory === null ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400" : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-emerald-200 dark:hover:border-emerald-800"
-                )}
-              >
-                <span className="font-bold">Все категории</span>
-                <span className="text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400">{items.length}</span>
-              </button>
+            <div className="space-y-4 max-h-[70vh] overflow-y-auto pr-2 custom-scrollbar">
+              {/* Add Category Section */}
+              {isAddingCategory ? (
+                <div className="bg-emerald-50 dark:bg-emerald-900/10 p-4 rounded-2xl border border-emerald-100 dark:border-emerald-800/50 space-y-3">
+                  <p className="text-xs font-bold text-emerald-600 dark:text-emerald-400 uppercase tracking-wider">Новая категория</p>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={addCategoryInput}
+                    onChange={(e) => setAddCategoryInput(e.target.value)}
+                    placeholder="Название категории..."
+                    className="w-full px-4 py-2 bg-white dark:bg-slate-800 border border-emerald-200 dark:border-emerald-800 rounded-xl focus:ring-2 focus:ring-emerald-500 outline-none transition-all dark:text-slate-100"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        handleAddCategory(addCategoryInput);
+                        setAddCategoryInput('');
+                        setIsAddingCategory(false);
+                      }
+                    }}
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setIsAddingCategory(false)}
+                      className="flex-1 px-4 py-2 border border-emerald-200 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400 rounded-lg hover:bg-white dark:hover:bg-slate-800 transition-colors font-medium"
+                    >
+                      Отмена
+                    </button>
+                    <button
+                      onClick={() => {
+                        handleAddCategory(addCategoryInput);
+                        setAddCategoryInput('');
+                        setIsAddingCategory(false);
+                      }}
+                      className="flex-1 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors font-medium shadow-lg shadow-emerald-200 dark:shadow-none flex items-center justify-center gap-2"
+                    >
+                      <Save size={18} />
+                      Сохранить
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => {
+                      setSelectedCategory(null);
+                      setSelectedSubclass(null);
+                      setIsCategoryModalOpen(false);
+                    }}
+                    className={cn(
+                      "flex-1 flex items-center justify-between p-4 rounded-xl border transition-all",
+                      selectedCategory === null ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400" : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-emerald-200 dark:hover:border-emerald-800"
+                    )}
+                  >
+                    <span className="font-bold">Все категории</span>
+                    <span className="text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400">{items.length}</span>
+                  </button>
+                  <button
+                    onClick={() => setIsAddingCategory(true)}
+                    className="p-4 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-500/20"
+                    title="Добавить категорию"
+                  >
+                    <Plus size={24} />
+                  </button>
+                </div>
+              )}
               
-              {Array.from(new Set(items.map(i => i.category || 'Без категории')))
-                .sort()
-                .map(category => {
-                  const categoryItems = items.filter(i => (i.category || 'Без категории') === category);
+              {/* Categories List */}
+              {categories
+                .sort((a, b) => a.name.localeCompare(b.name))
+                .map(cat => {
+                  const categoryItems = items.filter(i => i.category === cat.name);
                   const count = categoryItems.length;
-                  const subclasses = Array.from(new Set(categoryItems.map(i => i.subclass || 'Без подкласса'))).sort();
-                  const isExpanded = expandedCategories.includes(category);
+                  const isExpanded = expandedCategories.includes(cat.name);
+                  const isRenaming = categoryToRename === cat.name;
 
                   return (
-                    <div key={category} className="space-y-1">
-                      <div className="flex items-center gap-1">
+                    <div key={cat.id} className="space-y-1">
+                      <div className="flex items-center gap-2 group">
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             setExpandedCategories(prev => 
-                              prev.includes(category) 
-                                ? prev.filter(c => c !== category) 
-                                : [...prev, category]
+                              prev.includes(cat.name) 
+                                ? prev.filter(c => c !== cat.name) 
+                                : [...prev, cat.name]
                             );
                           }}
                           className={cn(
@@ -1732,22 +2076,67 @@ export default function App() {
                         >
                           {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
                         </button>
-                        <button
-                          onClick={() => {
-                            setSelectedCategory(category === 'Без категории' ? '' : category);
-                            setSelectedSubclass(null);
-                            setIsCategoryModalOpen(false);
-                          }}
-                          className={cn(
-                            "flex-1 flex items-center justify-between p-3 rounded-xl border transition-all text-left",
-                            (selectedCategory === (category === 'Без категории' ? '' : category) && selectedSubclass === null) 
-                              ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400" 
-                              : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-emerald-200 dark:hover:border-emerald-800"
-                          )}
-                        >
-                          <span className="font-bold text-sm">{category}</span>
-                          <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400">{count}</span>
-                        </button>
+                        
+                        {isRenaming ? (
+                          <div className="flex-1 flex gap-2">
+                            <input
+                              autoFocus
+                              type="text"
+                              value={newCategoryName}
+                              onChange={(e) => setNewCategoryName(e.target.value)}
+                              className="flex-1 px-3 py-1.5 bg-white dark:bg-slate-800 border border-emerald-500 rounded-lg outline-none text-sm dark:text-slate-100"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') handleRenameCategory(cat.name, newCategoryName);
+                                if (e.key === 'Escape') setCategoryToRename(null);
+                              }}
+                            />
+                            <button 
+                              onClick={() => handleRenameCategory(cat.name, newCategoryName)}
+                              className="p-1.5 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                            >
+                              <Save size={16} />
+                            </button>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              setSelectedCategory(cat.name);
+                              setSelectedSubclass(null);
+                              setIsCategoryModalOpen(false);
+                            }}
+                            className={cn(
+                              "flex-1 flex items-center justify-between p-3 rounded-xl border transition-all text-left min-w-0",
+                              (selectedCategory === cat.name && selectedSubclass === null) 
+                                ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400" 
+                                : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-emerald-200 dark:hover:border-emerald-800"
+                            )}
+                          >
+                            <span className="font-bold text-sm truncate">{cat.name}</span>
+                            <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 shrink-0">{count}</span>
+                          </button>
+                        )}
+
+                        {!isRenaming && (
+                          <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <button
+                              onClick={() => {
+                                setCategoryToRename(cat.name);
+                                setNewCategoryName(cat.name);
+                              }}
+                              className="p-2 text-slate-400 hover:text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-all"
+                              title="Переименовать"
+                            >
+                              <Edit2 size={16} />
+                            </button>
+                            <button
+                              onClick={() => setCategoryToDelete(cat.name)}
+                              className="p-2 text-slate-400 hover:text-rose-500 hover:bg-rose-50 dark:hover:bg-rose-900/20 rounded-lg transition-all"
+                              title="Удалить"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          </div>
+                        )}
                       </div>
                       
                       <AnimatePresence>
@@ -1758,37 +2147,203 @@ export default function App() {
                             exit={{ opacity: 0, height: 0 }}
                             className="pl-6 grid grid-cols-1 gap-1 overflow-hidden border-l-2 border-emerald-100 dark:border-emerald-900/50 ml-5 mt-1 mb-2"
                           >
-                            {subclasses.map(sub => {
-                              const subCount = categoryItems.filter(i => (i.subclass || 'Без подкласса') === sub).length;
-                              const subValue = sub === 'Без подкласса' ? '' : sub;
-                              const catValue = category === 'Без категории' ? '' : category;
-                              
-                              return (
-                                <button
-                                  key={sub}
-                                  onClick={() => {
-                                    setSelectedCategory(catValue);
-                                    setSelectedSubclass(subValue);
-                                    setIsCategoryModalOpen(false);
+                            {cat.subclasses
+                              .sort()
+                              .map((sub, idx) => {
+                                const subCount = categoryItems.filter(i => i.subclass === sub).length;
+                                const isSubRenaming = subclassToRename?.category === cat.name && subclassToRename?.subclass === sub;
+
+                                return (
+                                  <div key={`${sub}-${idx}`} className="flex items-center gap-2 group/sub">
+                                    {isSubRenaming ? (
+                                      <div className="flex-1 flex gap-2 py-1">
+                                        <input
+                                          autoFocus
+                                          type="text"
+                                          value={newSubclassName}
+                                          onChange={(e) => setNewSubclassName(e.target.value)}
+                                          className="flex-1 px-3 py-1 bg-white dark:bg-slate-800 border border-emerald-400 rounded-lg outline-none text-xs dark:text-slate-100"
+                                          onKeyDown={(e) => {
+                                            if (e.key === 'Enter') handleRenameSubclass(cat.name, sub, newSubclassName);
+                                            if (e.key === 'Escape') setSubclassToRename(null);
+                                          }}
+                                        />
+                                        <button 
+                                          onClick={() => handleRenameSubclass(cat.name, sub, newSubclassName)}
+                                          className="p-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
+                                        >
+                                          <Save size={14} />
+                                        </button>
+                                      </div>
+                                    ) : (
+                                      <button
+                                        onClick={() => {
+                                          setSelectedCategory(cat.name);
+                                          setSelectedSubclass(sub);
+                                          setIsCategoryModalOpen(false);
+                                        }}
+                                        className={cn(
+                                          "flex-1 flex items-center justify-between p-2 pl-4 rounded-lg border transition-all text-sm",
+                                          (selectedCategory === cat.name && selectedSubclass === sub) 
+                                            ? "bg-emerald-50/50 dark:bg-emerald-900/10 border-emerald-100 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400" 
+                                            : "bg-white dark:bg-slate-800 border-transparent hover:border-emerald-100 dark:hover:border-emerald-800 text-slate-500 dark:text-slate-400"
+                                        )}
+                                      >
+                                        <span className="truncate">{sub}</span>
+                                        <span className="text-[10px] bg-slate-50 dark:bg-slate-900/50 px-1.5 py-0.5 rounded text-slate-400 dark:text-slate-500">{subCount}</span>
+                                      </button>
+                                    )}
+
+                                    {!isSubRenaming && (
+                                      <div className="flex gap-1 opacity-0 group-hover/sub:opacity-100 transition-opacity">
+                                        <button
+                                          onClick={() => {
+                                            setSubclassToRename({ category: cat.name, subclass: sub });
+                                            setNewSubclassName(sub);
+                                          }}
+                                          className="p-1.5 text-slate-400 hover:text-blue-500 rounded transition-all"
+                                          title="Переименовать"
+                                        >
+                                          <Edit2 size={14} />
+                                        </button>
+                                        <button
+                                          onClick={() => setSubclassToDelete({ category: cat.name, subclass: sub })}
+                                          className="p-1.5 text-slate-400 hover:text-rose-500 rounded transition-all"
+                                          title="Удалить"
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            
+                            {/* Add Subclass Section */}
+                            {isAddingSubclass === cat.name ? (
+                              <div className="flex gap-2 py-1">
+                                <input
+                                  autoFocus
+                                  type="text"
+                                  value={addSubclassInput}
+                                  onChange={(e) => setAddSubclassInput(e.target.value)}
+                                  placeholder="Новый подкласс..."
+                                  className="flex-1 px-3 py-1 bg-white dark:bg-slate-800 border border-emerald-300 rounded-lg outline-none text-xs dark:text-slate-100"
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      handleAddSubclass(cat.name, addSubclassInput);
+                                      setAddSubclassInput('');
+                                      setIsAddingSubclass(null);
+                                    }
                                   }}
-                                  className={cn(
-                                    "w-full flex items-center justify-between p-2 pl-4 rounded-lg border transition-all text-sm",
-                                    (selectedCategory === catValue && selectedSubclass === subValue)
-                                      ? "bg-emerald-50/50 dark:bg-emerald-900/10 border-emerald-100 dark:border-emerald-800 text-emerald-600 dark:text-emerald-400"
-                                      : "bg-white dark:bg-slate-800 border-transparent hover:border-emerald-100 dark:hover:border-emerald-800 text-slate-500 dark:text-slate-400"
-                                  )}
+                                />
+                                <button 
+                                  onClick={() => {
+                                    handleAddSubclass(cat.name, addSubclassInput);
+                                    setAddSubclassInput('');
+                                    setIsAddingSubclass(null);
+                                  }}
+                                  className="p-1 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700"
                                 >
-                                  <span>{sub}</span>
-                                  <span className="text-[10px] bg-slate-50 dark:bg-slate-900/50 px-1.5 py-0.5 rounded text-slate-400 dark:text-slate-500">{subCount}</span>
+                                  <Plus size={14} />
                                 </button>
-                              );
-                            })}
+                                <button 
+                                  onClick={() => setIsAddingSubclass(null)}
+                                  className="p-1 text-slate-400 hover:text-rose-500"
+                                >
+                                  <X size={14} />
+                                </button>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => setIsAddingSubclass(cat.name)}
+                                className="w-full flex items-center gap-2 p-2 text-[10px] font-bold text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-all uppercase tracking-wider"
+                              >
+                                <Plus size={12} /> Добавить подкласс
+                              </button>
+                            )}
                           </motion.div>
                         )}
                       </AnimatePresence>
                     </div>
                   );
                 })}
+
+              {/* "Without Category" special case */}
+              {items.some(i => !i.category) && (
+                <button
+                  onClick={() => {
+                    setSelectedCategory('');
+                    setSelectedSubclass(null);
+                    setIsCategoryModalOpen(false);
+                  }}
+                  className={cn(
+                    "w-full flex items-center justify-between p-4 rounded-xl border transition-all",
+                    selectedCategory === '' ? "bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800 text-emerald-700 dark:text-emerald-400" : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-emerald-200 dark:hover:border-emerald-800"
+                  )}
+                >
+                  <span className="font-bold">Без категории</span>
+                  <span className="text-xs bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400">{items.filter(i => !i.category).length}</span>
+                </button>
+              )}
+            </div>
+          </Modal>
+        )}
+
+        {categoryToDelete && (
+          <Modal isOpen={true} onClose={() => setCategoryToDelete(null)} title="Удалить категорию">
+            <div className="flex flex-col items-center gap-4 py-2">
+              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-full text-rose-600 mb-2">
+                <AlertCircle size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-slate-600 dark:text-slate-400 mb-1">Удалить категорию:</p>
+                <p className="text-lg font-bold text-slate-900 dark:text-slate-100">{categoryToDelete}?</p>
+                <p className="text-sm text-slate-400 dark:text-slate-500 mt-2">Все товары в этой категории останутся без категории.</p>
+              </div>
+              <div className="flex gap-3 w-full mt-6">
+                <button 
+                  onClick={() => setCategoryToDelete(null)}
+                  className="flex-1 px-4 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all font-medium"
+                >
+                  Отмена
+                </button>
+                <button 
+                  onClick={() => handleDeleteCategory(categoryToDelete)}
+                  className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl hover:bg-rose-700 transition-all font-medium shadow-lg shadow-rose-100 dark:shadow-none"
+                >
+                  Удалить
+                </button>
+              </div>
+            </div>
+          </Modal>
+        )}
+
+        {subclassToDelete && (
+          <Modal isOpen={true} onClose={() => setSubclassToDelete(null)} title="Удалить подкласс">
+            <div className="flex flex-col items-center gap-4 py-2">
+              <div className="bg-rose-50 dark:bg-rose-900/20 p-4 rounded-full text-rose-600 mb-2">
+                <AlertCircle size={32} />
+              </div>
+              <div className="text-center">
+                <p className="text-slate-600 dark:text-slate-400 mb-1">Удалить подкласс:</p>
+                <p className="text-lg font-bold text-slate-900 dark:text-slate-100">{subclassToDelete.subclass}?</p>
+                <p className="text-sm text-slate-400 dark:text-slate-500 mt-2">В категории: {subclassToDelete.category}</p>
+              </div>
+              <div className="flex gap-3 w-full mt-6">
+                <button 
+                  onClick={() => setSubclassToDelete(null)}
+                  className="flex-1 px-4 py-3 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-800 transition-all font-medium"
+                >
+                  Отмена
+                </button>
+                <button 
+                  onClick={() => handleDeleteSubclass(subclassToDelete.category, subclassToDelete.subclass)}
+                  className="flex-1 px-4 py-3 bg-rose-600 text-white rounded-xl hover:bg-rose-700 transition-all font-medium shadow-lg shadow-rose-100 dark:shadow-none"
+                >
+                  Удалить
+                </button>
+              </div>
             </div>
           </Modal>
         )}
@@ -1904,14 +2459,14 @@ export default function App() {
                                 setLocationSearchQuery('');
                               }}
                               className={cn(
-                                "flex-1 flex items-center justify-between p-4 rounded-xl border transition-all text-left",
+                                "flex-1 flex items-center justify-between p-4 rounded-xl border transition-all text-left min-w-0",
                                 selectedLocation === loc.name
                                   ? "bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-400" 
                                   : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700 hover:border-indigo-200 dark:hover:border-indigo-800"
                               )}
                             >
-                              <span className="font-bold text-sm">{loc.name}</span>
-                              <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400">{count}</span>
+                              <span className="font-bold text-sm truncate">{loc.name}</span>
+                              <span className="text-[10px] bg-slate-100 dark:bg-slate-700 px-2 py-1 rounded-lg text-slate-500 dark:text-slate-400 shrink-0">{count}</span>
                             </button>
                             <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
                               <button
