@@ -260,45 +260,45 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
     handlePauseResume();
   }, [isPaused, isCameraStarted, isScanSuccess]);
 
-  useEffect(() => {
-    isMountedRef.current = true;
-    
-    const initCameras = async () => {
-      try {
-        const devices = await Html5Qrcode.getCameras();
-        if (!isMountedRef.current) return;
-        
-        // Try to find the back cameras
-        const backCameras = devices.filter(device => 
-          device.label.toLowerCase().includes('back') || 
-          device.label.toLowerCase().includes('rear') ||
-          device.label.toLowerCase().includes('задняя') ||
-          device.label.toLowerCase().includes('environment') ||
-          device.label.toLowerCase().includes('основная') ||
-          device.label.toLowerCase().includes('внешняя')
-        );
+  const initCameras = useCallback(async () => {
+    if (!isMountedRef.current) return;
+    try {
+      const devices = await Html5Qrcode.getCameras();
+      if (!isMountedRef.current) return;
+      
+      // Try to find the back cameras
+      const backCameras = devices.filter(device => 
+        device.label.toLowerCase().includes('back') || 
+        device.label.toLowerCase().includes('rear') ||
+        device.label.toLowerCase().includes('задняя') ||
+        device.label.toLowerCase().includes('environment') ||
+        device.label.toLowerCase().includes('основная') ||
+        device.label.toLowerCase().includes('внешняя')
+      );
 
-        if (backCameras.length > 0) {
-          setCameras(backCameras);
+      if (backCameras.length > 0) {
+        setCameras(backCameras);
+        setCurrentCameraIndex(0);
+      } else {
+        setCameras(devices);
+        if (devices.length > 0) {
           setCurrentCameraIndex(0);
         } else {
-          setCameras(devices);
-          if (devices.length > 0) {
-            setCurrentCameraIndex(0);
-          } else {
-            // No cameras found, but we can still try facingMode: environment
-            startScanner();
-          }
-        }
-      } catch (err) {
-        console.error("Camera detection error:", err);
-        // Even if detection fails, try starting with default facingMode
-        if (isMountedRef.current) {
+          // No cameras found, but we can still try facingMode: environment
           startScanner();
         }
       }
-    };
+    } catch (err) {
+      console.error("Camera detection error:", err);
+      // Even if detection fails, try starting with default facingMode
+      if (isMountedRef.current) {
+        startScanner();
+      }
+    }
+  }, []);
 
+  useEffect(() => {
+    isMountedRef.current = true;
     initCameras();
 
     return () => {
@@ -308,7 +308,7 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
         scannerRef.current = null;
       }
     };
-  }, []);
+  }, [initCameras]);
 
   useEffect(() => {
     if (currentCameraIndex !== null) {
@@ -324,12 +324,16 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
     
     try {
       if (scannerRef.current) {
-        await scannerRef.current.stop().catch(() => {});
+        try {
+          await scannerRef.current.stop();
+        } catch (e) {
+          console.warn("Scanner stop error (safe to ignore):", e);
+        }
         scannerRef.current = null;
       }
 
-      // Small delay to ensure DOM is ready and previous session is closed
-      await new Promise(r => setTimeout(r, 500));
+      // Ensure DOM element is ready
+      await new Promise(r => setTimeout(r, 800));
       if (!isMountedRef.current) return;
 
       const elementId = "qr-reader";
@@ -337,48 +341,59 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
       scannerRef.current = scanner;
 
       const config = { 
-        fps: 20, // Increased FPS for faster recognition
-        qrbox: { width: 300, height: 300 }, // Fixed size matching UI
-        aspectRatio: 1.0
+        fps: 20,
+        qrbox: { width: 300, height: 300 },
+        aspectRatio: 1.0,
+        formatsToSupport: [ Html5QrcodeSupportedFormats.QR_CODE ]
       };
 
-      const source = (cameras.length > 0 && currentCameraIndex !== null) 
-        ? { deviceId: cameras[currentCameraIndex].id } 
-        : { facingMode: "environment" };
+      // Try with specific camera if selected, otherwise try environment, then fallback to any
+      let source: any = { facingMode: "environment" };
+      if (cameras.length > 0 && currentCameraIndex !== null && cameras[currentCameraIndex]) {
+        source = { deviceId: cameras[currentCameraIndex].id };
+      }
 
-      await scanner.start(
-        source,
-        config,
-        (text) => {
-          if (isMountedRef.current && !isProcessingRef.current) {
-            isProcessingRef.current = true;
-            
-            // Provide haptic feedback if available
-            if (window.navigator.vibrate) {
-              window.navigator.vibrate(100);
-            }
+      try {
+        await scanner.start(
+          source,
+          config,
+          (text) => {
+            if (isMountedRef.current && !isProcessingRef.current) {
+              isProcessingRef.current = true;
+              
+              if (window.navigator.vibrate) {
+                window.navigator.vibrate(100);
+              }
 
-            const resultName = onScanRef.current(text);
-            if (resultName) {
-              setScannedResult(resultName);
-              setIsScanSuccess(true);
-              
-              // Pause scanner to show result
-              scannerRef.current?.pause().catch(() => {});
-              
-              // We no longer close automatically. 
-              // The parent will pause us if a modal is opened.
-              // When the modal closes, we will resume via the isPaused effect.
-            } else {
-              // If no match found, resume after a short delay to allow re-scanning
-              setTimeout(() => {
-                isProcessingRef.current = false;
-              }, 2000);
+              const resultName = onScanRef.current(text);
+              if (resultName) {
+                setScannedResult(resultName);
+                setIsScanSuccess(true);
+                scannerRef.current?.pause().catch(() => {});
+              } else {
+                setTimeout(() => {
+                  isProcessingRef.current = false;
+                }, 2000);
+              }
             }
-          }
-        },
-        () => {} // silent failure for frames
-      );
+          },
+          () => {}
+        );
+      } catch (startErr: any) {
+        console.warn("Primary scanner start failed, trying fallback:", startErr);
+        // If specific source failed, try any available camera
+        if (isMountedRef.current) {
+          await scanner.start(
+            { facingMode: "user" }, // Try front camera as fallback
+            config,
+            (text) => { /* same callback */ },
+            () => {}
+          ).catch(async () => {
+            // Last resort: just start with whatever is available
+            return await scanner.start({}, config, () => {}, () => {});
+          });
+        }
+      }
 
       if (isMountedRef.current) {
         setIsCameraStarted(true);
@@ -387,7 +402,13 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
     } catch (err: any) {
       console.error("Scanner start error:", err);
       if (isMountedRef.current) {
-        setError(err.message || "Ошибка запуска камеры");
+        let msg = "Ошибка запуска камеры";
+        if (err.name === "NotAllowedError") msg = "Доступ к камере запрещен. Пожалуйста, разрешите доступ в настройках браузера.";
+        else if (err.name === "NotFoundError") msg = "Камера не найдена на этом устройстве.";
+        else if (err.name === "NotReadableError") msg = "Камера уже используется другим приложением или вкладкой.";
+        else if (err.message) msg = `Ошибка: ${err.message}`;
+        
+        setError(msg);
         setIsInitializing(false);
         setIsCameraStarted(false);
       }
@@ -397,7 +418,20 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
   return (
     <div className="flex flex-col h-full bg-black relative overflow-hidden">
       {/* Header Controls */}
-      <div className="absolute top-0 left-0 right-0 z-[1000] p-4 flex justify-end items-center pointer-events-none">
+      <div className="absolute top-0 left-0 right-0 z-[1000] p-4 flex justify-between items-center pointer-events-none">
+        <div className="flex gap-2 pointer-events-auto">
+          {cameras.length > 1 && (
+            <button 
+              onClick={() => {
+                setCurrentCameraIndex(prev => (prev === null ? 0 : (prev + 1) % cameras.length));
+              }}
+              className="p-3 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-md border border-white/20 shadow-lg transition-all active:scale-95"
+              title="Переключить камеру"
+            >
+              <RefreshCw size={24} className={isInitializing ? "animate-spin" : ""} />
+            </button>
+          )}
+        </div>
         <button 
           onClick={onClose}
           className="p-3 bg-black/50 hover:bg-black/70 text-white rounded-full backdrop-blur-md border border-white/20 shadow-lg transition-all active:scale-95 pointer-events-auto"
@@ -468,7 +502,7 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
           <p className="text-slate-400 mb-6 text-sm">{error}</p>
           <div className="flex flex-col gap-3 w-full max-w-xs">
             <button 
-              onClick={startScanner}
+              onClick={() => initCameras()}
               className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xl shadow-blue-900/20 transition-all active:scale-95"
             >
               Попробовать снова
