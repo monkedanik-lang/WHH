@@ -226,6 +226,7 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
   const [isCameraStarted, setIsCameraStarted] = useState(false);
   const [scannedResult, setScannedResult] = useState<string | null>(null);
   const [isScanSuccess, setIsScanSuccess] = useState(false);
+  const [needsManualStart, setNeedsManualStart] = useState(false);
   
   const scannerRef = useRef<Html5Qrcode | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -262,7 +263,20 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
 
   const initCameras = useCallback(async () => {
     if (!isMountedRef.current) return;
+    setIsInitializing(true);
+    setError(null);
+    setNeedsManualStart(false);
+
     try {
+      // Some browsers require a direct getUserMedia call to trigger the prompt reliably
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        // Stop the stream immediately, we just wanted the permission
+        stream.getTracks().forEach(track => track.stop());
+      } catch (e) {
+        console.warn("Manual getUserMedia failed, continuing with getCameras:", e);
+      }
+
       const devices = await Html5Qrcode.getCameras();
       if (!isMountedRef.current) return;
       
@@ -288,11 +302,15 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
           startScanner();
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("Camera detection error:", err);
-      // Even if detection fails, try starting with default facingMode
       if (isMountedRef.current) {
-        startScanner();
+        if (err.name === "NotAllowedError" || err.name === "PermissionDeniedError") {
+          setError("Доступ к камере запрещен. Пожалуйста, разрешите доступ в настройках браузера.");
+        } else {
+          setNeedsManualStart(true);
+          setIsInitializing(false);
+        }
       }
     }
   }, []);
@@ -301,14 +319,23 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
     isMountedRef.current = true;
     initCameras();
 
+    // Timeout for manual start fallback
+    const timer = setTimeout(() => {
+      if (isMountedRef.current && !isCameraStarted && !error) {
+        setNeedsManualStart(true);
+        setIsInitializing(false);
+      }
+    }, 5000);
+
     return () => {
       isMountedRef.current = false;
+      clearTimeout(timer);
       if (scannerRef.current) {
         scannerRef.current.stop().catch(() => {});
         scannerRef.current = null;
       }
     };
-  }, [initCameras]);
+  }, [initCameras, isCameraStarted, error]);
 
   useEffect(() => {
     if (currentCameraIndex !== null) {
@@ -521,12 +548,43 @@ const QRScanner = ({ onScan, onClose, isPaused = false, isFloating = false }: { 
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/90 backdrop-blur-sm z-[200]">
           <div className="w-12 h-12 border-4 border-blue-500/30 border-t-blue-500 rounded-full animate-spin mb-4" />
           <p className="text-white font-medium mb-6">Инициализация камеры...</p>
+          <p className="text-white/50 text-xs mb-6 text-center px-6">Если запрос на разрешение не появился, попробуйте нажать кнопку ниже</p>
+          <button 
+            onClick={() => initCameras()}
+            className="px-8 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold transition-all active:scale-95 mb-4"
+          >
+            Запросить разрешение
+          </button>
           <button 
             onClick={onClose}
             className="px-6 py-2 bg-white/10 hover:bg-white/20 text-white rounded-lg transition-all"
           >
             Отмена
           </button>
+        </div>
+      )}
+
+      {needsManualStart && !isCameraStarted && !error && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-900 text-white p-6 text-center z-[150]">
+          <div className="w-20 h-20 bg-blue-500/20 rounded-full flex items-center justify-center mb-4">
+            <Camera size={40} className="text-blue-400" />
+          </div>
+          <h3 className="text-xl font-bold mb-2">Требуется разрешение</h3>
+          <p className="text-slate-400 mb-6 text-sm">Для работы сканера необходимо разрешить доступ к камере в вашем браузере.</p>
+          <div className="flex flex-col gap-3 w-full max-w-xs">
+            <button 
+              onClick={() => initCameras()}
+              className="w-full py-4 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold shadow-xl shadow-blue-900/20 transition-all active:scale-95"
+            >
+              Включить камеру
+            </button>
+            <button 
+              onClick={onClose}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl font-medium transition-all"
+            >
+              Закрыть
+            </button>
+          </div>
         </div>
       )}
 

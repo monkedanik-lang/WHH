@@ -1,5 +1,5 @@
 {
   "name": "Складской Помощник (Warehouse Assistant)",
   "description": "Система управления складом с генерацией QR-кодов, отслеживанием остатков и управлением инвентарем.",
-  "requestFramePermissions": ["camera"]
+  "requestFramePermissions": ["camera", "microphone"]
 }
